@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from .checks import check_version
 from .metrics import bbox_iou
+from copy import copy
 
 TORCH_1_10 = check_version(torch.__version__, '1.10.0')
 
@@ -243,24 +244,58 @@ class TaskAlignedAssigner(nn.Module):
         return target_labels, target_bboxes, target_scores
 
 
-def make_anchors(feats, strides, grid_cell_offset=0.5):
+def make_anchors(feats, strides, anchors, stridess, grid_cell_offset=0.5):
+# def make_anchors(feats, strides, grid_cell_offset=0.5):
     """Generate anchors from features."""
     anchor_points, stride_tensor = [], []
     assert feats is not None
     dtype, device = feats[0].dtype, feats[0].device
+    # _, _, h, w = feats[0].shape
+    # sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
+    # sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+    # sy, sx = torch.meshgrid(sy, sx, indexing='ij') if TORCH_1_10 else torch.meshgrid(sy, sx)
+    # dummy = torch.stack((sx, sy), -1).view(-1, 2)
+
+    # anchors.transpose(0, 1)
+    # strides.transpose(0, 1)
+
+    # print(len(feats))
+    sizes = [0, feats[0].shape[-1] * feats[0].shape[-2], feats[1].shape[-1] * feats[1].shape[-2], feats[2].shape[-1] * feats[2].shape[-2]]
+    sizes[2] += sizes[1]
+    sizes[3] += sizes[2]
+
+    # anchor_points = torch.zeros((sizes[-1], 2))
+    # stride_tensor = torch.zeros((sizes[-1], 1))
+    # print(sizes)
     for i, stride in enumerate(strides):
         _, _, h, w = feats[i].shape
         sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
         sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
         sy, sx = torch.meshgrid(sy, sx, indexing='ij') if TORCH_1_10 else torch.meshgrid(sy, sx)
-        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
-        stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
-    return torch.cat(anchor_points), torch.cat(stride_tensor)
+        # anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        anchors[:, sizes[i]:sizes[i + 1]] = torch.stack((sx, sy), -1).view(2, -1)
+        # anchor_points.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
+        # stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
+        # anchor_points[i] += torch.stack((sx, sy), -1).view(-1, 2)
+        stridess[:, sizes[i]:sizes[i + 1]] = stride
+        # stride_tensor
+        # print(h, w)
+    # for a in anchor_points:
+    #     print(a.shape)
+    # return torch.cat(anchor_points), torch.cat(stride_tensor)
+    # return anchor_points, stride_tensor
+    
 
 
 def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
     """Transform distance(ltrb) to box(xywh or xyxy)."""
+    # size = sum(a.shape[-1] * a.shape[-2] for a in x)
+    # anchor_points = anchors
+    # anchor_points = copy(anchors)
+    # anchor_points = anchor_points.permute((0, 2, 1))
     lt, rb = distance.chunk(2, dim)
+    # print(anchor_points.shape, lt.shape, rb.shape)
+    # print(lt.shape, rb.shape)
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
     if xywh:

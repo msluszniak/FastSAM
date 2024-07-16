@@ -438,6 +438,7 @@ class FastSAMPrompt:
         return np.array([onemask])
 
     def text_prompt(self, text):
+        import clip
         if self.results == None:
             return []
         format_results = self._format_results(self.results[0], 0)

@@ -125,6 +125,8 @@ class v8DetectionLoss:
         self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+        self.anchors = torch.zeros((2, 21504))
+        self.strides = torch.zeros((1, 21504))
 
     def preprocess(self, targets, batch_size, scale_tensor):
         """Preprocesses the target counts and matches with the input batch size to output a tensor."""
@@ -165,7 +167,12 @@ class v8DetectionLoss:
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
-        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
+        # print(self.anchors)
+        # anchor_points, stride_tensor = make_anchors(feats, self.stride, self.anchors, 0.5)
+        print(self.anchors.shape)
+        make_anchors(feats, self.stride, self.anchors, self.strides, 0.5)
+        print(self.anchors.shape)
+        # print(self.anchors)
 
         # targets
         targets = torch.cat((batch['batch_idx'].view(-1, 1), batch['cls'].view(-1, 1), batch['bboxes']), 1)
@@ -174,11 +181,11 @@ class v8DetectionLoss:
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 
         # pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+        pred_bboxes = self.bbox_decode(self.anchors, pred_distri)  # xyxy, (b, h*w, 4)
 
         _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
-            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
+            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * self.strides).type(gt_bboxes.dtype),
+            self.strides * self.strides, gt_labels, gt_bboxes, mask_gt)
 
         target_scores_sum = max(target_scores.sum(), 1)
 
@@ -188,8 +195,8 @@ class v8DetectionLoss:
 
         # bbox loss
         if fg_mask.sum():
-            target_bboxes /= stride_tensor
-            loss[0], loss[2] = self.bbox_loss(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores,
+            target_bboxes /= self.strides
+            loss[0], loss[2] = self.bbox_loss(pred_distri, pred_bboxes, self.anchors, target_bboxes, target_scores,
                                               target_scores_sum, fg_mask)
 
         loss[0] *= self.hyp.box  # box gain
@@ -222,8 +229,10 @@ class v8SegmentationLoss(v8DetectionLoss):
 
         dtype = pred_scores.dtype
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
-        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
-
+        # anchor_points, stride_tensor = make_anchors(feats, self.stride, self.anchors, 0.5)
+        print(self.anchors.shape)
+        make_anchors(feats, self.stride, self.anchors, self.strides, 0.5)
+        print(self.anchors.shape)
         # targets
         try:
             batch_idx = batch['batch_idx'].view(-1, 1)
@@ -239,11 +248,11 @@ class v8SegmentationLoss(v8DetectionLoss):
                             'as an example.\nSee https://docs.ultralytics.com/tasks/segment/ for help.') from e
 
         # pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+        pred_bboxes = self.bbox_decode(self.anchors, pred_distri)  # xyxy, (b, h*w, 4)
 
         _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
-            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
+            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * self.strides).type(gt_bboxes.dtype),
+            self.anchors * self.strides, gt_labels, gt_bboxes, mask_gt)
 
         target_scores_sum = max(target_scores.sum(), 1)
 
@@ -253,7 +262,7 @@ class v8SegmentationLoss(v8DetectionLoss):
 
         if fg_mask.sum():
             # bbox loss
-            loss[0], loss[3] = self.bbox_loss(pred_distri, pred_bboxes, anchor_points, target_bboxes / stride_tensor,
+            loss[0], loss[3] = self.bbox_loss(pred_distri, pred_bboxes, self.anchors, target_bboxes / self.strides,
                                               target_scores, target_scores_sum, fg_mask)
             # masks loss
             masks = batch['masks'].to(self.device).float()
@@ -320,7 +329,9 @@ class v8PoseLoss(v8DetectionLoss):
 
         dtype = pred_scores.dtype
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
-        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
+        print(self.anchors.shape)
+        make_anchors(feats, self.stride, self.anchors, self.strides, 0.5)
+        print(self.anchors.shape)
 
         # targets
         batch_size = pred_scores.shape[0]
@@ -331,12 +342,12 @@ class v8PoseLoss(v8DetectionLoss):
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 
         # pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
-        pred_kpts = self.kpts_decode(anchor_points, pred_kpts.view(batch_size, -1, *self.kpt_shape))  # (b, h*w, 17, 3)
+        pred_bboxes = self.bbox_decode(self.anchors, pred_distri)  # xyxy, (b, h*w, 4)
+        pred_kpts = self.kpts_decode(self.anchors, pred_kpts.view(batch_size, -1, *self.kpt_shape))  # (b, h*w, 17, 3)
 
         _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
-            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
+            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * self.strides).type(gt_bboxes.dtype),
+            self.anchors * self.strides, gt_labels, gt_bboxes, mask_gt)
 
         target_scores_sum = max(target_scores.sum(), 1)
 
@@ -346,8 +357,8 @@ class v8PoseLoss(v8DetectionLoss):
 
         # bbox loss
         if fg_mask.sum():
-            target_bboxes /= stride_tensor
-            loss[0], loss[4] = self.bbox_loss(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores,
+            target_bboxes /= self.strides
+            loss[0], loss[4] = self.bbox_loss(pred_distri, pred_bboxes, self.anchors, target_bboxes, target_scores,
                                               target_scores_sum, fg_mask)
             keypoints = batch['keypoints'].to(self.device).float().clone()
             keypoints[..., 0] *= imgsz[1]
@@ -356,8 +367,8 @@ class v8PoseLoss(v8DetectionLoss):
                 if fg_mask[i].sum():
                     idx = target_gt_idx[i][fg_mask[i]]
                     gt_kpt = keypoints[batch_idx.view(-1) == i][idx]  # (n, 51)
-                    gt_kpt[..., 0] /= stride_tensor[fg_mask[i]]
-                    gt_kpt[..., 1] /= stride_tensor[fg_mask[i]]
+                    gt_kpt[..., 0] /= self.strides[fg_mask[i]]
+                    gt_kpt[..., 1] /= self.strides[fg_mask[i]]
                     area = xyxy2xywh(target_bboxes[i][fg_mask[i]])[:, 2:].prod(1, keepdim=True)
                     pred_kpt = pred_kpts[i][fg_mask[i]]
                     kpt_mask = gt_kpt[..., 2] != 0

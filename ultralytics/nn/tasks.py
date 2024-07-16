@@ -178,12 +178,16 @@ class BaseModel(nn.Module):
         Returns:
             A model that is a Detect() object.
         """
+        m = self.model[-1]
+        # print(m.anchors.shape)
         self = super()._apply(fn)
-        m = self.model[-1]  # Detect()
+        # m = self.model[-1]  # Detect()
+        # print(m.anchors.shape)
         if isinstance(m, (Detect, Segment)):
             m.stride = fn(m.stride)
             m.anchors = fn(m.anchors)
             m.strides = fn(m.strides)
+        # print(m.anchors.shape)
         return self
 
     def load(self, weights, verbose=True):
